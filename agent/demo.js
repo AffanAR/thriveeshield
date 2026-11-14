@@ -13,6 +13,7 @@ import { createServer } from '../risk-service/server.js';
 import { createDemoAccounts, deployVault } from '../scripts/setup.js';
 import { ShieldedWallet } from './wrapper.js';
 import { approvePending, confirmReport } from './approve.js';
+import { renderReport } from './report.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
@@ -20,17 +21,32 @@ const network = process.argv.includes('--network') ? process.argv[process.argv.i
 const outFile = path.join(root, 'evidence', `demo-${network}.log`);
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
 fs.writeFileSync(outFile, '');
-const print = (line = '') => {
-  console.log(line);
+// Everything printed is also kept per section, for the HTML report.
+const sections = [{ title: 'Setup', lines: [], checks: [] }];
+const tty = process.stdout.isTTY;
+const paint = (line) => (tty
+  ? line.replace(/\bPASS\b/g, '\x1b[32mPASS\x1b[0m').replace(/\b(FAIL|REJECTED)\b/g, '\x1b[31m$1\x1b[0m').replace(/^=== .*/, '\x1b[1m$&\x1b[0m')
+  : line);
+const emit = (line) => {
+  console.log(paint(line));
   fs.appendFileSync(outFile, `${line}\n`);
+};
+const print = (line = '') => {
+  emit(line);
+  if (line) sections.at(-1).lines.push(line.replace(/^ {2}/, ''));
 };
 
 const results = [];
 function expect(label, ok, detail = '') {
   results.push({ label, ok });
-  print(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  (${detail})` : ''}`);
+  sections.at(-1).checks.push({ label, ok, detail });
+  emit(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  (${detail})` : ''}`);
 }
-const heading = (t) => { print(); print(`=== ${t}`); };
+const heading = (t) => {
+  emit('');
+  emit(`=== ${t}`);
+  sections.push({ title: t, lines: [], checks: [] });
+};
 const ONE = toYocto('1');
 
 async function boot() {
@@ -82,13 +98,15 @@ const scriptedAgent = (text) => {
   return m ? { tool: 'pay', to: m[2], amount: toYocto(m[1]).toString() } : null;
 };
 
+let permission = '';
 try {
   print('ThriveeShield demo');
   print(`network: ${network}   vault: ${vaultId}   owner: ${state.ownerId}`);
   print(`agent key: ${state.agentPublicKey}  (function-call key: vault only, request_payment + report_address)`);
   const keys = await provider.viewAccessKeyList({ accountId: vaultId });
   const k = keys.keys.find((x) => x.public_key === state.agentPublicKey);
-  print(`on-chain key permission: ${JSON.stringify(k?.access_key?.permission)}`);
+  permission = JSON.stringify(k?.access_key?.permission);
+  print(`on-chain key permission: ${permission}`);
 
   await call(owner, vaultId, 'allowlist_add', { account: demo.friend.id });
   print(`owner allowlisted ${demo.friend.id}`);
@@ -168,6 +186,35 @@ try {
   const vaultAfter = await bal(vaultId);
   expect('vault balance did not drop', Number(vaultAfter) >= Number(vaultBefore) - 0.001, `${vaultBefore} -> ${vaultAfter}`);
 
+  // ------------------------------------------------------------------ extra
+  heading('Extra checks: limits, wrapper hold, failed transfer');
+  const r6 = await wallet.pay({ to: demo.friend.id, amount: toYocto('3'), memo: 'too big' });
+  print(`  3 NEAR to the allowlisted receiver (per-tx limit is 2 NEAR): verdict ${r6.check.verdict}, status ${r6.status}`);
+  expect('over-limit payment is refused even for an allowlisted receiver', r6.status === 'refused');
+
+  const r7 = await call(wallet.agent, vaultId, 'request_payment', { receiver: demo.friend.id, amount: ONE.toString(), memo: 'held', hold: true });
+  print(`  allowlisted receiver with hold=true (the wrapper passing on an off-chain warn): ${r7.value.verdict}, pending #${r7.value.pending_id}`);
+  expect('hold=true turns an ALLOW into a pending payment', r7.value.verdict === 'WARN' && r7.value.pending_id > 0);
+  let keptPending = false;
+  try { await call(wallet.agent, vaultId, 'reject_pending', { id: r7.value.pending_id }); } catch { keptPending = true; }
+  expect('the agent key cannot clear its own pending payment', keptPending);
+  await call(owner, vaultId, 'reject_pending', { id: r7.value.pending_id });
+  expect('the owner rejected it and the queue is empty', (await v('get_pending')).length === 0);
+
+  const ghost = `shield-ghost.${state.funderId}`;
+  await call(owner, vaultId, 'allowlist_add', { account: ghost });
+  const spentBefore = (await v('policy')).spent_today;
+  const r8 = await call(wallet.agent, vaultId, 'request_payment', { receiver: ghost, amount: ONE.toString(), memo: 'to a missing account' });
+  let spentAfter = (await v('policy')).spent_today;
+  for (let i = 0; i < 10 && spentAfter !== spentBefore; i += 1) {
+    await new Promise((r) => setTimeout(r, 500));
+    spentAfter = (await v('policy')).spent_today;
+  }
+  print(`  payment to ${ghost} (allowlisted, but the account does not exist): contract said ${r8.value.verdict}, transfer failed`);
+  print(`  spent today before ${fromYocto(spentBefore)} NEAR, after ${fromYocto(spentAfter)} NEAR`);
+  expect('a failed transfer is rolled back and does not use up the daily limit', spentAfter === spentBefore);
+  expect('the contract logged a payment_failed event', r8.logs.some((l) => l.includes('payment_failed')));
+
   heading('Final vault state');
   const policy = await v('policy');
   print(`  paid out today: ${fromYocto(policy.spent_today)} NEAR of ${fromYocto(policy.daily_limit)} NEAR daily limit`);
@@ -179,7 +226,12 @@ try {
 }
 
 const failed = results.filter((r) => !r.ok);
-print();
-print(failed.length ? `RESULT: ${failed.length} of ${results.length} checks FAILED` : `RESULT: all ${results.length} checks passed`);
-print(`log written to evidence/demo-${network}.log and logs/agent.jsonl`);
+fs.writeFileSync(path.join(root, 'evidence', `demo-${network}-report.html`), renderReport({
+  network, vaultId, ownerId: state.ownerId, agentPublicKey: state.agentPublicKey, permission,
+  sections: sections.filter((s) => s.lines.length || s.checks.length), results,
+  generatedAt: new Date().toISOString(),
+}));
+emit('');
+emit(failed.length ? `RESULT: ${failed.length} of ${results.length} checks FAILED` : `RESULT: all ${results.length} checks passed`);
+emit(`log: evidence/demo-${network}.log   visual report: evidence/demo-${network}-report.html   agent log: logs/agent.jsonl`);
 process.exit(failed.length ? 1 : 0);

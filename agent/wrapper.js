@@ -72,7 +72,9 @@ export class ShieldedWallet {
 
     let res;
     try {
-      res = await call(this.agent, this.vaultId, 'request_payment', { receiver: to, amount: amountStr, memo });
+      // hold = true passes an off-chain WARN on to the contract: even a receiver the vault would
+      // pay straight away is then held as pending until the owner approves it.
+      res = await call(this.agent, this.vaultId, 'request_payment', { receiver: to, amount: amountStr, memo, hold: check.verdict === 'warn' });
     } catch (err) {
       const reason = describeError(err);
       this.log('chain_error', { to, reason });

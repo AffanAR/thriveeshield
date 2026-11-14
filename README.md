@@ -27,6 +27,14 @@ Four signals feed the risk service (`risk-service/signals/`):
 
 Anyone can call `report_address(target, evidence)`. **One report only raises WARN.** A BLOCK needs the owner to call `confirm_report`, so nobody can grief a legitimate address into a block.
 
+Hardening in the contract:
+
+- `new` is `#[private]`, so nobody can initialise the vault between deploy and init.
+- `request_payment(..., hold)`: when the off-chain service says warn, the wrapper sets `hold = true` and the contract holds the payment even for an allowlisted receiver. `hold` can only make a verdict stricter.
+- The pending queue is capped at 50, so a stolen agent key cannot grow it without bound.
+- Approving a pending payment while it is over a limit fails and **keeps it pending**. Only a blocklisted receiver removes it.
+- If a transfer fails (for example the receiver account does not exist) a callback rolls back the daily limit and the receiver stats.
+
 ## How NEAR is used
 
 - **Smart contract** (`contract/`, Rust, near-sdk 5): the vault, the pending queue, the blocklist registry, the on-chain attempt log.
@@ -54,13 +62,15 @@ Windows, or any machine with Docker (this is how the recorded run was made):
 docker run --rm -e DIR_TO_DOWNLOAD_BINARY=/opt/sbx -v "$PWD:/app" -w /app node:24-trixie bash -c "npm ci && node agent/demo.js"
 ```
 
-The first run downloads the `near-sandbox` binary. The demo exits `0` if all checks pass and `1` if any fail. It also writes `evidence/demo-sandbox.log`.
+The first run downloads the `near-sandbox` binary. The demo exits `0` if all checks pass and `1` if any fail. It also writes `evidence/demo-sandbox.log` and a visual report, `evidence/demo-sandbox-report.html` (open it in a browser).
+
+![Demo report](evidence/screenshots/report-overview.png)
 
 Other tests:
 
 ```bash
-npm test               # risk service unit tests (Node, no network)
-npm run contract:test  # 23 contract unit tests (needs Docker, or run `cargo test` in contract/)
+npm test               # 11 risk service unit tests (Node, no network)
+npm run contract:test  # 29 contract unit tests (needs Docker, or run `cargo test` in contract/)
 ```
 
 ## Do X, see Y
@@ -75,21 +85,24 @@ The demo prints each of these. Expected results:
 | Scenario 4: the same attack with the wrapper bypassed (direct `request_payment` with the agent key) | contract returns `BLOCK`, an `EVENT_JSON ... "blocked"` log, and an entry in the on-chain attempt log. Balance unchanged |
 | Scenario 5: the agent key tries a direct transfer, `withdraw`, `approve_pending`, `allowlist_add` and adding a full-access key | every call prints `REJECTED` with the protocol's reason. The vault balance does not drop |
 
-The last line is `RESULT: all N checks passed`. The agent's own log is `logs/agent.jsonl`, one JSON line per step (`payment_requested`, `risk_check`, `refused_before_signing`, ...).
+| Extra checks: 3 NEAR to the allowlisted receiver (limit is 2), a payment sent with `hold=true`, a payment to an allowlisted account that does not exist | the over-limit payment is `refused`. The held payment is `WARN, pending`, the agent key cannot clear it, the owner rejects it. The failed transfer leaves `spent today` unchanged and logs `payment_failed` |
+
+The last line is `RESULT: all 24 checks passed`. The agent's own log is `logs/agent.jsonl`, one JSON line per step (`payment_requested`, `risk_check`, `refused_before_signing`, ...).
 
 The "agent" is **scripted** (a regex standing in for an LLM that obeys the injected text). This is deliberate: the shield has to hold when the model is fooled, so the demo does not depend on a live model or an API key.
 
 ## Layout
 
 ```text
-contract/src/lib.rs      vault, pending queue, blocklist registry, 23 unit tests
+contract/src/lib.rs      vault, pending queue, blocklist registry, 29 unit tests
 contract/res/*.wasm      prebuilt contract (rebuild: npm run contract:build, needs Docker)
 risk-service/            POST /check -> verdict + reasons (server.js, engine.js, signals/)
 agent/wrapper.js         check -> sign or refuse, logs everything
 agent/approve.js         the human: list / approve / reject / confirm-report (owner key)
-agent/demo.js            the 5 scenarios
+agent/demo.js            the 5 scenarios plus extra checks
+agent/report.js          renders the run as an HTML report
 scripts/setup.js         create accounts, deploy, init policy, add the scoped key
-evidence/                recorded demo output
+evidence/                recorded demo output, HTML report, screenshots
 ```
 
 Run the risk service on its own: `VAULT_ID=<vault> NETWORK=testnet node risk-service/server.js`, then `POST /check` with `{"receiver":"alice.testnet","amount":"1000000000000000000000000"}`. It fails closed: if it cannot decide it answers `warn`.
@@ -107,7 +120,7 @@ The agent key can only call `request_payment` and `report_address` on the vault,
 - Payments are native NEAR only. No USDC, no Intents.
 - The demo runs on a local sandbox, not testnet. `scripts/setup.js --network testnet` and `npm run demo:testnet` exist but **were not run during the hackathon window**, because the testnet faucet is a web page and no funded testnet account was available. Treat them as untested.
 - The age signal needs the NearBlocks v3 API. On a full page of 25 transactions it can only prove "at least this old". With no indexer (the sandbox) it reports `unknown` and never escalates.
-- A transfer to an account that does not exist fails on-chain after the vault counted it against the daily limit (conservative, never over-pays).
+- There is no web app. The only visual is the HTML report the demo writes. The human approves through `agent/approve.js` on the command line.
 - Reports are free and public. A griefer can raise WARN on an allowlisted address (a human then reviews it), never a BLOCK.
 - Not audited. Do not use with real funds.
 
@@ -118,7 +131,7 @@ This is a new repository. Everything in it was written during the hackathon wind
 ## Libraries and AI-generated code
 
 - Libraries: `near-sdk` 5 (Rust), `near-api-js` 7, `near-sandbox` (npm), Node built-ins (`node:http`, `node:test`). Build uses the official `rust:1-bookworm` image and `binaryen`'s `wasm-opt`.
-- AI-generated code: **the code, tests and this README were written with Claude Code (Claude Sonnet 5.5)** under the author's direction, and run and checked by the demo and test suites above.
+- AI-generated code: **the code, tests and this README were written with Claude Code (Claude Sonnet 5.5 and Claude Fable 5.2)** under the author's direction, and run and checked by the demo and test suites above.
 
 ## License
 

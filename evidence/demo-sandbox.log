@@ -2,12 +2,12 @@ starting a local NEAR sandbox (downloads the sandbox binary on first run)...
 creating accounts, deploying the vault, adding the agent function-call key...
 ThriveeShield demo
 network: sandbox   vault: shield-vault.sandbox   owner: shield-owner.sandbox
-agent key: ed25519:EqSC5D5pyxbh47jF9E9ybzssLk4N8eyXFmPcWcnnHqTD  (function-call key: vault only, request_payment + report_address)
+agent key: ed25519:47G1jhAZyvBEPKKSWwMBvXfNfCNnJvHPjpc1BtwezMhX  (function-call key: vault only, request_payment + report_address)
 on-chain key permission: {"FunctionCall":{"allowance":"250000000000000000000000","method_names":["request_payment","report_address"],"receiver_id":"shield-vault.sandbox"}}
 owner allowlisted shield-friend.sandbox
 
 === Scenario 1: allowlisted payment is paid
-  verdict: allow  status: paid  tx: 9icbhTq9vJFXNsjbgoMKiwGKPLGJpufnDFQxjdNno182
+  verdict: allow  status: paid  tx: J9rAYWRV1GYJTHBapGiKXAt2ZwTqeGAFq1zij23VYZJo
   PASS  wrapper status is paid
   PASS  receiver balance went up by 1 NEAR  (1 -> 2)
 
@@ -15,7 +15,7 @@ owner allowlisted shield-friend.sandbox
   [human asked] pending #1: pay 1 NEAR to shield-stranger.sandbox? reason: receiver is not on the allowlist
   verdict: warn  status: pending  pending id: 1
   PASS  payment is pending, not paid
-  human (owner key) approved #1: ALLOW (approved by owner) tx: 7yNUcLhjYARYtCD1pvQrpwan9jugiMNcHS1ibjMvUirS
+  human (owner key) approved #1: ALLOW (approved by owner) tx: B16UHjwV4YCASS62vTfawShdh1D7MPwhpxbpyfgYxiet
   PASS  after approval the receiver got 1 NEAR
   PASS  pending queue is empty again
 
@@ -37,7 +37,7 @@ owner allowlisted shield-friend.sandbox
 
 === Scenario 4: injected prompt, wrapper BYPASSED: blocked on-chain and logged
   a compromised agent skips the wrapper and calls the vault directly with its key
-  contract verdict: BLOCK (receiver is on the confirmed blocklist)  tx: HN7LNAZkbAfn3wEnnVNfipjM7Yr1jRvm9c8SL4jTk8sE
+  contract verdict: BLOCK (receiver is on the confirmed blocklist)  tx: 3F318tCtk4FN1QFGFUr6oCNzoBtybpa4DQXbD1CiLCVx
   on-chain attempt log:
     #2 BLOCK  shield-scam.sandbox  1 NEAR  - receiver is on the confirmed blocklist
   contract event: EVENT_JSON:{"standard":"thriveeshield","version":"1.0.0","event":"blocked","data":{"receiver":"shield-scam.sandbox","amount":"1000000000000000000000000","reason":"receiver is on the confirmed blocklist"}}
@@ -61,12 +61,24 @@ owner allowlisted shield-friend.sandbox
   add a full-access key to the vault
     -> REJECTED: Access key requires full access
   PASS  add a full-access key to the vault: rejected
-  PASS  vault balance did not drop  (7.9974 -> 7.9974)
+  PASS  vault balance did not drop  (7.9971 -> 7.9971)
+
+=== Extra checks: limits, wrapper hold, failed transfer
+  3 NEAR to the allowlisted receiver (per-tx limit is 2 NEAR): verdict block, status refused
+  PASS  over-limit payment is refused even for an allowlisted receiver
+  allowlisted receiver with hold=true (the wrapper passing on an off-chain warn): WARN, pending #2
+  PASS  hold=true turns an ALLOW into a pending payment
+  PASS  the agent key cannot clear its own pending payment
+  PASS  the owner rejected it and the queue is empty
+  payment to shield-ghost.sandbox (allowlisted, but the account does not exist): contract said ALLOW, transfer failed
+  spent today before 2 NEAR, after 2 NEAR
+  PASS  a failed transfer is rolled back and does not use up the daily limit
+  PASS  the contract logged a payment_failed event
 
 === Final vault state
   paid out today: 2 NEAR of 5 NEAR daily limit
   blocklist: shield-scam.sandbox
-  attempts logged on-chain: 3
+  attempts logged on-chain: 5
 
-RESULT: all 18 checks passed
-log written to evidence/demo-sandbox.log and logs/agent.jsonl
+RESULT: all 24 checks passed
+log: evidence/demo-sandbox.log   visual report: evidence/demo-sandbox-report.html   agent log: logs/agent.jsonl

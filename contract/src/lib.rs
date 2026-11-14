@@ -15,12 +15,15 @@
 use near_sdk::json_types::U128;
 use near_sdk::serde_json::json;
 use near_sdk::store::{IterableMap, IterableSet, LookupMap, Vector};
-use near_sdk::{env, near, require, AccountId, BorshStorageKey, NearToken, PanicOnDefault, Promise};
+use near_sdk::{env, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError};
 
 const MS_PER_DAY: u64 = 86_400_000;
 const MAX_EVIDENCE_LEN: usize = 512;
 const MAX_REPORTS_PER_TARGET: usize = 20;
 const MAX_VIEW_LIMIT: u64 = 100;
+/// A stolen agent key cannot grow the pending queue past this.
+const MAX_PENDING: u32 = 50;
+const CALLBACK_GAS: Gas = Gas::from_tgas(5);
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [borsh])]
@@ -122,6 +125,7 @@ pub struct Vault {
 #[near]
 impl Vault {
     #[init]
+    #[private]
     pub fn new(owner: AccountId, per_tx_limit: U128, daily_limit: U128) -> Self {
         require!(!env::state_exists(), "already initialised");
         require!(per_tx_limit.0 <= daily_limit.0, "per-tx limit cannot exceed the daily limit");
@@ -152,11 +156,22 @@ impl Vault {
 
     /// Called by the agent's function-call key. The contract decides the verdict.
     /// BLOCK and WARN do not panic, so the attempt log and the pending entry are kept.
-    pub fn request_payment(&mut self, receiver: AccountId, amount: U128, memo: Option<String>) -> Outcome {
+    ///
+    /// `hold = true` is how the agent wrapper passes on an off-chain WARN: a payment the contract
+    /// would ALLOW is held for the human instead. `hold` can only make the verdict stricter.
+    pub fn request_payment(&mut self, receiver: AccountId, amount: U128, memo: Option<String>, hold: Option<bool>) -> Outcome {
         self.assert_vault_key();
         self.roll_day();
         let now = env::block_timestamp_ms();
-        let (verdict, reason) = self.evaluate(&receiver, amount.0);
+        let (mut verdict, mut reason) = self.evaluate(&receiver, amount.0);
+        if verdict == Verdict::Allow && hold.unwrap_or(false) {
+            verdict = Verdict::Warn;
+            reason = "held for human review at the wrapper's request (off-chain risk signal)".into();
+        }
+        if verdict == Verdict::Warn && self.pending.len() >= MAX_PENDING {
+            verdict = Verdict::Block;
+            reason = "the pending queue is full, the owner must review it first".into();
+        }
         self.log_attempt(&receiver, amount, verdict, &reason, now);
 
         match verdict {
@@ -201,15 +216,21 @@ impl Vault {
         self.assert_owner();
         self.roll_day();
         let p = self.pending.get(&id).cloned().unwrap_or_else(|| env::panic_str("no such pending payment"));
-        self.pending.remove(&id);
         let now = env::block_timestamp_ms();
         let (verdict, reason) = self.evaluate(&p.receiver, p.amount.0);
         // The owner overrides WARN, never BLOCK.
         if verdict == Verdict::Block {
+            // A temporary block (limit, balance, pause) keeps the payment pending so it can be
+            // approved later. A blocklisted receiver removes it for good.
+            if !self.blocklist.contains(&p.receiver) {
+                env::panic_str(&format!("cannot approve now: {reason}"));
+            }
+            self.pending.remove(&id);
             self.log_attempt(&p.receiver, p.amount, Verdict::Block, &format!("approval refused: {reason}"), now);
             self.event("approval_refused", json!({ "id": id, "reason": reason }));
             return Outcome { verdict, reason, pending_id: None };
         }
+        self.pending.remove(&id);
         self.pay(&p.receiver, p.amount.0, now);
         self.event("approved", json!({ "id": id, "receiver": p.receiver, "amount": p.amount.0.to_string() }));
         Outcome { verdict: Verdict::Allow, reason: "approved by owner".into(), pending_id: None }
@@ -312,6 +333,24 @@ impl Vault {
             .collect()
     }
 
+    /// Callback after every payout. If the transfer failed (for example the receiver account does
+    /// not exist) the NEAR came back to the vault, so the limit and the stats are rolled back.
+    #[private]
+    pub fn on_paid(&mut self, receiver: AccountId, amount: U128, day_index: u64, #[callback_result] result: Result<(), PromiseError>) {
+        if result.is_ok() {
+            return;
+        }
+        if self.day_index == day_index {
+            self.spent_today = self.spent_today.saturating_sub(amount.0);
+        }
+        if let Some(mut s) = self.stats.get(&receiver).cloned() {
+            s.paid_count = s.paid_count.saturating_sub(1);
+            s.total_paid = U128(s.total_paid.0.saturating_sub(amount.0));
+            self.stats.insert(receiver.clone(), s);
+        }
+        self.event("payment_failed", json!({ "receiver": receiver, "amount": amount.0.to_string() }));
+    }
+
     /// What verdict would this payment get right now? Used by the off-chain risk service.
     pub fn preview_payment(&self, receiver: AccountId, amount: U128) -> Outcome {
         let (verdict, reason) = self.evaluate(&receiver, amount.0);
@@ -384,7 +423,11 @@ impl Vault {
         s.total_paid = U128(s.total_paid.0 + amount);
         s.last_paid_ms = now;
         self.stats.insert(receiver.clone(), s);
-        let _ = Promise::new(receiver.clone()).transfer(NearToken::from_yoctonear(amount));
+        let _ = Promise::new(receiver.clone()).transfer(NearToken::from_yoctonear(amount)).then(
+            Self::ext(env::current_account_id())
+                .with_static_gas(CALLBACK_GAS)
+                .on_paid(receiver.clone(), U128(amount), self.day_index),
+        );
     }
 
     fn log_attempt(&mut self, receiver: &AccountId, amount: U128, verdict: Verdict, reason: &str, at_ms: u64) {
@@ -442,9 +485,9 @@ mod tests {
     fn allow_pays_an_allowlisted_receiver() {
         let mut v = setup();
         as_agent(2_000);
-        let o = v.request_payment(id("friend.testnet"), U128(NEAR), None);
+        let o = v.request_payment(id("friend.testnet"), U128(NEAR), None, None);
         assert_eq!(o.verdict, Verdict::Allow);
-        assert_eq!(get_created_receipts().len(), 1);
+        assert!(!get_created_receipts().is_empty());
         assert_eq!(v.receiver_stats(id("friend.testnet")).paid_count, 1);
         assert_eq!(v.policy().spent_today.0, NEAR);
     }
@@ -453,7 +496,7 @@ mod tests {
     fn warn_holds_an_unknown_receiver_as_pending() {
         let mut v = setup();
         as_agent(2_000);
-        let o = v.request_payment(id("stranger.testnet"), U128(NEAR), Some("invoice 7".into()));
+        let o = v.request_payment(id("stranger.testnet"), U128(NEAR), Some("invoice 7".into()), None);
         assert_eq!(o.verdict, Verdict::Warn);
         assert_eq!(o.pending_id, Some(1));
         assert!(get_created_receipts().is_empty(), "no funds may move on WARN");
@@ -464,11 +507,11 @@ mod tests {
     fn owner_can_approve_a_pending_payment() {
         let mut v = setup();
         as_agent(2_000);
-        v.request_payment(id("stranger.testnet"), U128(NEAR), None);
+        v.request_payment(id("stranger.testnet"), U128(NEAR), None, None);
         as_owner(3_000);
         let o = v.approve_pending(1);
         assert_eq!(o.verdict, Verdict::Allow);
-        assert_eq!(get_created_receipts().len(), 1);
+        assert!(!get_created_receipts().is_empty());
         assert!(v.get_pending().is_empty());
         assert_eq!(v.receiver_stats(id("stranger.testnet")).paid_count, 1);
     }
@@ -477,7 +520,7 @@ mod tests {
     fn owner_can_reject_a_pending_payment() {
         let mut v = setup();
         as_agent(2_000);
-        v.request_payment(id("stranger.testnet"), U128(NEAR), None);
+        v.request_payment(id("stranger.testnet"), U128(NEAR), None, None);
         as_owner(3_000);
         v.reject_pending(1);
         assert!(get_created_receipts().is_empty());
@@ -490,7 +533,7 @@ mod tests {
         as_other("watcher.testnet", 2_000);
         v.report_address(id("friend.testnet"), "tx 123 drained a wallet".into());
         as_agent(3_000);
-        let o = v.request_payment(id("friend.testnet"), U128(NEAR), None);
+        let o = v.request_payment(id("friend.testnet"), U128(NEAR), None, None);
         assert_eq!(o.verdict, Verdict::Warn);
         assert!(!v.is_blocked(id("friend.testnet")));
     }
@@ -503,7 +546,7 @@ mod tests {
         as_owner(3_000);
         v.confirm_report(id("scam.testnet"));
         as_agent(4_000);
-        let o = v.request_payment(id("scam.testnet"), U128(NEAR), None);
+        let o = v.request_payment(id("scam.testnet"), U128(NEAR), None, None);
         assert_eq!(o.verdict, Verdict::Block);
         assert!(get_created_receipts().is_empty());
         let log = v.get_attempts(None, None);
@@ -516,7 +559,7 @@ mod tests {
     fn owner_cannot_approve_a_pending_payment_after_the_receiver_was_blocked() {
         let mut v = setup();
         as_agent(2_000);
-        v.request_payment(id("late.testnet"), U128(NEAR), None);
+        v.request_payment(id("late.testnet"), U128(NEAR), None, None);
         as_other("watcher.testnet", 2_500);
         v.report_address(id("late.testnet"), "rug".into());
         as_owner(3_000);
@@ -530,7 +573,7 @@ mod tests {
     fn per_tx_limit_blocks() {
         let mut v = setup();
         as_agent(2_000);
-        let o = v.request_payment(id("friend.testnet"), U128(3 * NEAR), None);
+        let o = v.request_payment(id("friend.testnet"), U128(3 * NEAR), None, None);
         assert_eq!(o.verdict, Verdict::Block);
         assert!(o.reason.contains("per-transaction"));
     }
@@ -540,14 +583,14 @@ mod tests {
         let mut v = setup();
         as_agent(2_000);
         for _ in 0..2 {
-            assert_eq!(v.request_payment(id("friend.testnet"), U128(2 * NEAR), None).verdict, Verdict::Allow);
+            assert_eq!(v.request_payment(id("friend.testnet"), U128(2 * NEAR), None, None).verdict, Verdict::Allow);
         }
-        assert_eq!(v.request_payment(id("friend.testnet"), U128(NEAR), None).verdict, Verdict::Allow);
-        let o = v.request_payment(id("friend.testnet"), U128(NEAR), None);
+        assert_eq!(v.request_payment(id("friend.testnet"), U128(NEAR), None, None).verdict, Verdict::Allow);
+        let o = v.request_payment(id("friend.testnet"), U128(NEAR), None, None);
         assert_eq!(o.verdict, Verdict::Block);
         assert!(o.reason.contains("daily"));
         as_agent(2_000 + MS_PER_DAY);
-        assert_eq!(v.request_payment(id("friend.testnet"), U128(NEAR), None).verdict, Verdict::Allow);
+        assert_eq!(v.request_payment(id("friend.testnet"), U128(NEAR), None, None).verdict, Verdict::Allow);
     }
 
     #[test]
@@ -556,14 +599,14 @@ mod tests {
         as_owner(2_000);
         v.set_paused(true);
         as_agent(3_000);
-        assert_eq!(v.request_payment(id("friend.testnet"), U128(NEAR), None).verdict, Verdict::Block);
+        assert_eq!(v.request_payment(id("friend.testnet"), U128(NEAR), None, None).verdict, Verdict::Block);
     }
 
     #[test]
     fn insufficient_balance_blocks() {
         let mut v = setup();
         testing_env!(ctx("vault.testnet", 2_000).account_balance(NearToken::from_millinear(1)).build());
-        assert_eq!(v.request_payment(id("friend.testnet"), U128(NEAR), None).verdict, Verdict::Block);
+        assert_eq!(v.request_payment(id("friend.testnet"), U128(NEAR), None, None).verdict, Verdict::Block);
     }
 
     #[test]
@@ -571,7 +614,7 @@ mod tests {
     fn the_owner_account_cannot_use_the_agent_method() {
         let mut v = setup();
         as_owner(2_000);
-        v.request_payment(id("friend.testnet"), U128(NEAR), None);
+        v.request_payment(id("friend.testnet"), U128(NEAR), None, None);
     }
 
     #[test]
@@ -579,7 +622,7 @@ mod tests {
     fn a_stranger_cannot_use_the_agent_method() {
         let mut v = setup();
         as_other("mallory.testnet", 2_000);
-        v.request_payment(id("mallory.testnet"), U128(NEAR), None);
+        v.request_payment(id("mallory.testnet"), U128(NEAR), None, None);
     }
 
     #[test]
@@ -587,7 +630,7 @@ mod tests {
     fn agent_key_cannot_approve_pending() {
         let mut v = setup();
         as_agent(2_000);
-        v.request_payment(id("stranger.testnet"), U128(NEAR), None);
+        v.request_payment(id("stranger.testnet"), U128(NEAR), None, None);
         v.approve_pending(1);
     }
 
@@ -654,6 +697,73 @@ mod tests {
         assert_eq!(v.preview_payment(id("friend.testnet"), U128(NEAR)).verdict, Verdict::Allow);
         assert_eq!(v.preview_payment(id("stranger.testnet"), U128(NEAR)).verdict, Verdict::Warn);
         assert!(v.get_attempts(None, None).is_empty());
+    }
+
+    #[test]
+    fn hold_flag_turns_an_allow_into_a_pending_payment() {
+        let mut v = setup();
+        as_agent(2_000);
+        let o = v.request_payment(id("friend.testnet"), U128(NEAR), None, Some(true));
+        assert_eq!(o.verdict, Verdict::Warn);
+        assert_eq!(o.pending_id, Some(1));
+        assert!(get_created_receipts().is_empty());
+    }
+
+    #[test]
+    fn hold_flag_cannot_soften_a_block() {
+        let mut v = setup();
+        as_agent(2_000);
+        let o = v.request_payment(id("friend.testnet"), U128(3 * NEAR), None, Some(false));
+        assert_eq!(o.verdict, Verdict::Block);
+    }
+
+    #[test]
+    fn pending_queue_is_capped() {
+        let mut v = setup();
+        as_agent(2_000);
+        for _ in 0..MAX_PENDING {
+            assert_eq!(v.request_payment(id("stranger.testnet"), U128(1), None, None).verdict, Verdict::Warn);
+        }
+        let o = v.request_payment(id("stranger.testnet"), U128(1), None, None);
+        assert_eq!(o.verdict, Verdict::Block);
+        assert!(o.reason.contains("pending queue is full"));
+        assert_eq!(v.get_pending().len() as u32, MAX_PENDING);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot approve now: amount would exceed the daily limit")]
+    fn approving_over_the_daily_limit_fails_and_keeps_the_payment_pending() {
+        let mut v = setup();
+        as_agent(2_000);
+        v.request_payment(id("stranger.testnet"), U128(2 * NEAR), None, None);
+        for _ in 0..2 {
+            v.request_payment(id("friend.testnet"), U128(2 * NEAR), None, None);
+        }
+        as_owner(3_000);
+        v.approve_pending(1);
+    }
+
+    #[test]
+    fn a_failed_transfer_rolls_back_the_limit_and_the_stats() {
+        let mut v = setup();
+        as_agent(2_000);
+        v.request_payment(id("friend.testnet"), U128(NEAR), None, None);
+        assert_eq!(v.policy().spent_today.0, NEAR);
+        let day = 2_000 / MS_PER_DAY;
+        v.on_paid(id("friend.testnet"), U128(NEAR), day, Err(PromiseError::Failed));
+        assert_eq!(v.policy().spent_today.0, 0);
+        assert_eq!(v.receiver_stats(id("friend.testnet")).paid_count, 0);
+        assert!(get_logs().iter().any(|l| l.contains("payment_failed")));
+    }
+
+    #[test]
+    fn a_successful_transfer_callback_changes_nothing() {
+        let mut v = setup();
+        as_agent(2_000);
+        v.request_payment(id("friend.testnet"), U128(NEAR), None, None);
+        v.on_paid(id("friend.testnet"), U128(NEAR), 2_000 / MS_PER_DAY, Ok(()));
+        assert_eq!(v.policy().spent_today.0, NEAR);
+        assert_eq!(v.receiver_stats(id("friend.testnet")).paid_count, 1);
     }
 
     #[test]

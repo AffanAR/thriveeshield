@@ -3,6 +3,7 @@
 # target-cpu=mvp keeps newer rustc from emitting wasm features the NEAR VM rejects;
 # wasm-opt then shrinks the file and fails the build if any non-MVP feature slipped in.
 set -euo pipefail
+export MSYS_NO_PATHCONV=1 # keeps Git Bash on Windows from rewriting /work
 cd "$(dirname "$0")/.."
 docker run --rm -v "$PWD/contract:/work" -v ts-target-wasm:/target -v ts-cargo:/usr/local/cargo/registry \
   -e CARGO_TARGET_DIR=/target -w /work rust:1-bookworm bash -c '
