@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import handler, { checkup, explain } from '../api/checkup.js';
+import handler, { checkup, explain, findKey } from '../api/checkup.js';
 import { validAccount } from '../api/_lib/checkup-data.js';
 
 const NO_CODE = '11111111111111111111111111111111';
@@ -92,6 +92,21 @@ test('the model only receives the audit facts, with the chosen model and a token
   assert.equal(sent.body.model, 'some/other-model');
   assert.equal(sent.body.max_tokens, 350);
   assert.deepEqual(Object.keys(JSON.parse(sent.body.messages[1].content)).sort(), ['account', 'appKeys', 'findings', 'fullAccessKeys', 'grade', 'score']);
+});
+
+test('key lookup tolerates naming slips and reports names, never values', () => {
+  assert.equal(findKey({ OPENROUTER_API_KEY: '  abc  ' }).key, 'abc');
+  assert.equal(findKey({ OPENROUTER_KEY: 'abc' }).key, 'abc');
+  assert.equal(findKey({ 'OpenRouter_Api_Key ': 'abc' }).key, 'abc');
+  assert.equal(findKey({ OPENROUTER_MODEL: 'some/model' }).key, null);
+  assert.match(findKey({}).reason, /sees: none/);
+  const empty = findKey({ OPENROUTER_API_KEY: '   ' });
+  assert.equal(empty.key, null);
+  assert.match(empty.reason, /"OPENROUTER_API_KEY" \(empty\)/);
+  const odd = findKey({ OPENROUTER_SECRET: 'super-secret-value' });
+  assert.equal(odd.key, null);
+  assert.match(odd.reason, /"OPENROUTER_SECRET"/);
+  assert.ok(!odd.reason.includes('super-secret-value'));
 });
 
 test('a missing account is reported as not found', async () => {

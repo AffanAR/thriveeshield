@@ -34,9 +34,25 @@ function rateLimited(ip) {
   return recent.length > PER_MINUTE;
 }
 
+// Finds the OpenRouter key. Accepts small naming differences (case, stray spaces, OPENROUTER_KEY).
+// When nothing usable is found, the reason lists the matching variable NAMES only, never values,
+// so a misnamed or empty setting can be diagnosed from the API answer.
+export function findKey(env) {
+  const names = Object.keys(env).filter((n) => /openrouter/i.test(n) && !/model/i.test(n));
+  const exact = typeof env.OPENROUTER_API_KEY === 'string' ? env.OPENROUTER_API_KEY.trim() : '';
+  if (exact) return { key: exact };
+  for (const n of names) {
+    const v = typeof env[n] === 'string' ? env[n].trim() : '';
+    if (v && /key|token/i.test(n)) return { key: v };
+  }
+  const seen = names.length ? names.map((n) => `"${n}"${String(env[n] || '').trim() ? '' : ' (empty)'}`).join(', ') : 'none';
+  return { key: null, reason: `no API key configured (OpenRouter variables this server sees: ${seen})` };
+}
+
 export async function explain(report, { fetchImpl = fetch, env = process.env } = {}) {
-  const key = env.OPENROUTER_API_KEY;
-  if (!key) return { text: null, model: null, reason: 'no API key configured' };
+  const found = findKey(env);
+  const key = found.key;
+  if (!key) return { text: null, model: null, reason: found.reason };
   const model = env.OPENROUTER_MODEL || DEFAULT_MODEL;
   const facts = {
     account: report.accountId,
