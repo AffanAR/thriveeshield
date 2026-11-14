@@ -50,6 +50,13 @@
   .p-ok{background:#0f2e1e;color:var(--ok)}.p-warn{background:#33250a;color:var(--warn)}.p-bad{background:#34121a;color:var(--bad)}.p-na{background:#1b2331;color:var(--mute)}
   .stats{display:flex;gap:22px;flex-wrap:wrap;margin-bottom:12px;color:var(--mute);font-size:14px}
   .stats b{color:var(--text);font-size:18px;display:block}
+  .txs li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-width:0;padding:10px 0;border-top:1px solid #1c2431;font-size:14px;overflow-wrap:anywhere}
+  .txs li:first-child{border-top:0;padding-top:0}
+  .txs li>*{min-width:0;overflow-wrap:anywhere}
+  .tx-l{font-weight:600}
+  .tx-cp{font-family:ui-monospace,Consolas,monospace;font-size:13px;color:var(--mute)}
+  .tx-time{color:var(--dim);font-size:13px;margin-left:auto}
+  .tx-link{font-size:13px}
   footer{color:var(--dim);font-size:13px;margin-top:28px}
 </style>
 </head>
@@ -101,6 +108,11 @@
         <tbody id="apps"></tbody>
       </table>
     </div>
+    <div class="panel">
+      <h2>Recent transactions</h2>
+      <ul class="txs" id="txs"></ul>
+      <div class="ai-note" id="tx-note"></div>
+    </div>
   </div>
 
   <footer>The score is rule-based: it counts full-access keys, keys for apps that no longer exist, and contact with blocklisted addresses. The blocklist is small, so a good score is not a guarantee. Hackathon prototype, not audited.</footer>
@@ -119,6 +131,18 @@
     if (cls) n.className = cls;
     if (text !== undefined) n.textContent = text;
     return n;
+  }
+
+  function relTime(iso) {
+    if (typeof iso !== 'string' || !iso) return '';
+    const d = new Date(iso);
+    const ms = d.getTime();
+    if (Number.isNaN(ms)) return '';
+    const diff = Math.max(0, Date.now() - ms);
+    if (diff < 3600000) return `${Math.floor(diff / 60000)} min ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)} h ago`;
+    if (diff < 30 * 86400000) return `${Math.floor(diff / 86400000)} d ago`;
+    return d.toLocaleDateString();
   }
 
   function show(r) {
@@ -174,6 +198,48 @@
       apps.appendChild(tr);
     }
     $('apps-table').hidden = r.keys.apps.length === 0;
+
+    const list = Array.isArray(r.transactions) ? r.transactions : [];
+    const txs = $('txs');
+    txs.replaceChildren();
+    for (const t of list) {
+      if (!t || typeof t !== 'object') continue;
+      const li = el('li');
+      const out = t.direction === 'out';
+      li.appendChild(el('span', out ? 'pill p-warn' : 'pill p-na', out ? 'Out' : 'In'));
+      li.appendChild(el('span', 'tx-l', typeof t.label === 'string' ? t.label : ''));
+      if (typeof t.amount === 'string' && t.amount.length > 0) {
+        li.appendChild(el('span', 'tx-amt', t.amount));
+      }
+      li.appendChild(el('span', 'tx-cp', t.counterparty === null || t.counterparty === undefined || t.counterparty === '' ? 'this account' : String(t.counterparty)));
+      if (t.success === false) {
+        li.appendChild(el('span', 'pill p-bad', 'failed'));
+      }
+      if (t.flagged === true) {
+        li.appendChild(el('span', 'pill p-bad', 'blocklisted'));
+      }
+      const rel = relTime(t.time);
+      if (rel) {
+        const tm = el('span', 'tx-time', rel);
+        tm.title = t.time;
+        li.appendChild(tm);
+      }
+      if (typeof t.hash === 'string' && /^[1-9A-HJ-NP-Za-km-z]{43,44}$/.test(t.hash) && (r.network === 'mainnet' || r.network === 'testnet')) {
+        const a = el('a', 'tx-link', 'View');
+        a.href = (r.network === 'mainnet' ? 'https://nearblocks.io/txns/' : 'https://testnet.nearblocks.io/txns/') + t.hash;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        li.appendChild(a);
+      }
+      txs.appendChild(li);
+    }
+    const partialTx = Array.isArray(r.partial) && r.partial.includes('recent transactions');
+    $('tx-note').textContent = partialTx
+      ? 'Recent transactions could not be read from the indexer right now.'
+      : list.length === 0
+        ? 'No recent transactions on this account.'
+        : '';
+
     $('result').hidden = false;
   }
 

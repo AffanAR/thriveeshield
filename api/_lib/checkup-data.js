@@ -1,5 +1,7 @@
 // Collects the public chain data the account check-up needs. Read-only: RPC views and the
 // NearBlocks indexer. No keys, no signing.
+import '../../extension/shared/guard-core.js';
+
 const NETWORKS = {
   mainnet: { rpc: 'https://rpc.mainnet.fastnear.com', indexer: 'https://api.nearblocks.io' },
   testnet: { rpc: 'https://test.rpc.fastnear.com', indexer: 'https://api-testnet.nearblocks.io' },
@@ -12,6 +14,78 @@ const TXN_PAGE = 25;
 
 export function validAccount(id) {
   return typeof id === 'string' && /^(?=.{2,64}$)[a-z0-9]+([._-][a-z0-9]+)*$/.test(id);
+}
+
+export function validTxHash(h) {
+  return typeof h === 'string' && /^[1-9A-HJ-NP-Za-km-z]{43,44}$/.test(h);
+}
+
+const MIN_DEPOSIT = 10n ** 20n; // 0.0001 NEAR; smaller values are 1-yocto security deposits
+
+function labelFor(actions, direction) {
+  if (!Array.isArray(actions) || actions.length === 0) return 'Other action';
+  const first = actions[0] && typeof actions[0] === 'object' ? actions[0] : {};
+  let base;
+  switch (first.action) {
+    case 'TRANSFER':
+      base = direction === 'out' ? 'Sent NEAR' : 'Received NEAR';
+      break;
+    case 'FUNCTION_CALL':
+      base = typeof first.method === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(first.method)
+        ? `Called ${first.method}`
+        : 'Called a contract method';
+      break;
+    case 'ADD_KEY':
+      base = 'Added a key';
+      break;
+    case 'DELETE_KEY':
+      base = 'Deleted a key';
+      break;
+    case 'CREATE_ACCOUNT':
+      base = 'Created an account';
+      break;
+    case 'DEPLOY_CONTRACT':
+      base = 'Deployed a contract';
+      break;
+    case 'DELETE_ACCOUNT':
+      base = 'Deleted an account';
+      break;
+    case 'STAKE':
+      base = 'Staked NEAR';
+      break;
+    default:
+      base = 'Other action';
+  }
+  return actions.length > 1 ? `${base} (+${actions.length - 1} more)` : base;
+}
+
+// Turns NearBlocks v3 transaction rows into display-safe items for the check-up report.
+export function mapTransactions(rows, accountId) {
+  if (!Array.isArray(rows)) return [];
+  const out = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const hash = row.transaction_hash;
+    if (!validTxHash(hash)) continue;
+    const ts = row.block_timestamp;
+    if (typeof ts !== 'string' || !/^\d+$/.test(ts)) continue;
+    const date = new Date(Math.floor(Number(ts) / 1e6));
+    if (Number.isNaN(date.getTime())) continue;
+    const time = date.toISOString();
+    const direction = row.signer_account_id === accountId ? 'out' : 'in';
+    const rawParty = direction === 'out' ? row.receiver_account_id : row.signer_account_id;
+    const counterparty = rawParty !== accountId && validAccount(rawParty) ? rawParty : null;
+    const label = labelFor(row.actions, direction);
+    const deposit = row.actions_agg && row.actions_agg.deposit;
+    const amount = typeof deposit === 'string' && /^\d+$/.test(deposit) && BigInt(deposit) >= MIN_DEPOSIT
+      ? globalThis.ThriveeGuard.fmtNear(deposit)
+      : null;
+    const success = !(row.outcomes && row.outcomes.status === false);
+    const flagged = counterparty !== null && BLOCKED_ACCOUNTS.has(counterparty);
+    out.push({ hash, time, direction, counterparty, label, amount, success, flagged });
+  }
+  out.sort((a, b) => b.time.localeCompare(a.time));
+  return out.slice(0, TXN_PAGE);
 }
 
 export const networkOf = (id) => (id.endsWith('.testnet') ? 'testnet' : 'mainnet');
@@ -41,13 +115,17 @@ export async function collect(accountId, fetchImpl = fetch) {
   if (!keyBody.result) partial.push('access keys');
 
   let txns = [];
+  let transactions = [];
   try {
     const res = await fetchImpl(`${NETWORKS[network].indexer}/v3/accounts/${encodeURIComponent(accountId)}/txns?limit=${TXN_PAGE}`);
     if (!res.ok) throw new Error(`indexer ${res.status}`);
-    txns = ((await res.json()).data || []).map((r) => ({
+    const body = await res.json();
+    const rows = Array.isArray(body.data) ? body.data : [];
+    txns = rows.map((r) => ({
       counterparty: r.receiver_account_id === accountId ? r.signer_account_id : r.receiver_account_id,
       when: Number(r.block_timestamp) / 1e6,
     })).filter((t) => validAccount(t.counterparty) && t.counterparty !== accountId);
+    transactions = mapTransactions(rows, accountId);
   } catch {
     partial.push('recent transactions');
   }
@@ -71,5 +149,5 @@ export async function collect(accountId, fetchImpl = fetch) {
   }));
   for (const id of counterparties) info[id] = { ...(info[id] || {}), blocked: BLOCKED_ACCOUNTS.has(id) };
 
-  return { accountId, network, account: acc.result, keys, txns, info, partial };
+  return { accountId, network, account: acc.result, keys, txns, transactions, info, partial };
 }

@@ -134,6 +134,7 @@ export async function checkup(accountId, deps = {}) {
       })),
     },
     transactionsChecked: data.txns.length,
+    transactions: data.transactions,
     partial: data.partial,
     ai: ai.text,
     aiModel: ai.text ? ai.model : null,

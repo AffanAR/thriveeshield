@@ -74,7 +74,7 @@ The first run downloads the `near-sandbox` binary. The demo exits `0` if all che
 Other tests:
 
 ```bash
-npm test               # 49 unit tests: risk service, wallet guard, wallet formats, check-up API (Node, no network)
+npm test               # 63 unit tests: risk service, wallet guard, wallet formats, check-up API (Node, no network)
 npm run contract:test  # 29 contract unit tests (needs Docker, or run `cargo test` in contract/)
 ```
 
@@ -134,7 +134,7 @@ Install the real extension: open `chrome://extensions`, turn on Developer mode, 
 
 ### Account check-up and the AI part
 
-`GET /api/checkup?account=<name>` (`api/checkup.js`, a Vercel function) reads the account's access keys and last 25 transactions from public RPC and NearBlocks, scores them with the same rules file the extension uses, then asks a model through OpenRouter (`anthropic/claude-haiku-5.5` by default) to explain the findings in plain words. The only input is an account name that must match the NEAR naming rules, so a visitor cannot send text to the model. If the model is unavailable the rule-based report is returned without it.
+`GET /api/checkup?account=<name>` (`api/checkup.js`, a Vercel function) reads the account's access keys and last 25 transactions from public RPC and NearBlocks, scores them with the same rules file the extension uses, returns the transactions as a list (time, direction, what it did, amount, counterparty, failed and blocklisted markers, shown on the page with explorer links), then asks a model through OpenRouter (`anthropic/claude-haiku-5.5` by default) to explain the findings in plain words. The only input is an account name that must match the NEAR naming rules, so a visitor cannot send text to the model. If the model is unavailable the rule-based report is returned without it.
 
 Deploy: import the repo in Vercel (no build step, `vercel.json` is included), add the environment variable `OPENROUTER_API_KEY`, and optionally `OPENROUTER_MODEL`. Set a spending limit on that key at OpenRouter: the in-memory rate limit in the function is best effort only.
 
@@ -188,7 +188,7 @@ This is a new repository. Everything in it was written during the hackathon wind
 
 - Libraries: `near-sdk` 5 (Rust), `near-api-js` 7, `near-sandbox` (npm), Node built-ins (`node:http`, `node:test`). Build uses the official `rust:1-bookworm` image and `binaryen`'s `wasm-opt`. The extension, the website and the API have no runtime dependencies.
 - Services: NEAR RPC (FastNEAR), NearBlocks API v3, OpenRouter (model `anthropic/claude-haiku-5.5`) for the check-up summary, Vercel for hosting.
-- AI-generated code: **the code, tests and this README were written with Claude Code (Claude Sonnet 5.5 and Claude Fable 5.2)** under the author's direction, and run and checked by the demo and test suites above.
+- AI-generated code: **the code, tests and this README were written with Claude Code (Claude Sonnet 5.5 and Claude Fable 5.2)** under the author's direction, and run and checked by the demo and test suites above. The check-up's recent-transactions list (the mapper in `api/_lib/checkup-data.js`, its tests, and the page panel) was written by Google Antigravity (Gemini 4 Argon) from a plan in `PLAN.md`, then reviewed and tested with Claude Code.
 
 ## License
 

@@ -16,8 +16,24 @@ function fakeFetch(calls = []) {
     }
     if (String(url).includes('nearblocks')) {
       return json({ data: [
-        { receiver_account_id: 'app.near', signer_account_id: 'me.near', block_timestamp: '1794000000000000000' },
-        { receiver_account_id: 'me.near', signer_account_id: 'friend.near', block_timestamp: '1793000000000000000' },
+        {
+          receiver_account_id: 'app.near',
+          signer_account_id: 'me.near',
+          block_timestamp: '1794000000000000000',
+          transaction_hash: 'Ck3LYWghs8p8wWTT16Ag5C5Zq4iEqbRV2F3Lsb27hgaY',
+          actions: [{ action: 'FUNCTION_CALL', method: 'play' }],
+          actions_agg: { deposit: '1' },
+          outcomes: { status: true },
+        },
+        {
+          receiver_account_id: 'me.near',
+          signer_account_id: 'friend.near',
+          block_timestamp: '1793000000000000000',
+          transaction_hash: '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin',
+          actions: [{ action: 'TRANSFER' }],
+          actions_agg: { deposit: '2000000000000000000000000' },
+          outcomes: { status: true },
+        },
       ] });
     }
     const p = JSON.parse(init.body).params;
@@ -56,9 +72,37 @@ test('check-up scores the account and attaches the AI summary', async () => {
   assert.ok(r.findings.some((f) => /gone\.near/.test(f.title)));
   assert.equal(r.keys.apps.find((a) => a.contract === 'gone.near').exists, false);
   assert.equal(r.transactionsChecked, 2);
+  assert.equal(r.transactions.length, 2);
+  assert.equal(r.transactions[0].direction, 'out');
+  assert.equal(r.transactions[0].counterparty, 'app.near');
+  assert.equal(r.transactions[0].label, 'Called play');
+  assert.equal(r.transactions[1].direction, 'in');
+  assert.equal(r.transactions[1].counterparty, 'friend.near');
+  assert.equal(r.transactions[1].label, 'Received NEAR');
+  assert.equal(r.transactions[1].amount, '2 NEAR');
   assert.equal(r.ai, 'AI summary for me.near');
   assert.equal(r.aiModel, 'anthropic/claude-haiku-5.5');
   assert.ok(r.score < 100);
+});
+
+test('when the indexer answers not-ok, transactions is empty and partial includes recent transactions', async () => {
+  const fetchImpl = async (url, init) => (String(url).includes('nearblocks') ? json({}, false, 500) : fakeFetch()(url, init));
+  const r = await checkup('me.near', { fetchImpl, env: {} });
+  assert.deepEqual(r.transactions, []);
+  assert.equal(r.transactionsChecked, 0);
+  assert.ok(r.partial.includes('recent transactions'));
+});
+
+test('the OpenRouter request body never contains a transaction hash', async () => {
+  let sentBody = '';
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('openrouter.ai')) sentBody = String(init.body);
+    return fakeFetch()(url, init);
+  };
+  await checkup('me.near', { fetchImpl, env: { OPENROUTER_API_KEY: 'k' } });
+  assert.ok(sentBody.length > 0);
+  assert.ok(!sentBody.includes('Ck3LYWghs8p8wWTT16Ag5C5Zq4iEqbRV2F3Lsb27hgaY'));
+  assert.ok(!sentBody.includes('9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin'));
 });
 
 test('without an API key the rule-based report still comes back', async () => {
