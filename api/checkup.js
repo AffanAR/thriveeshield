@@ -11,6 +11,9 @@ const DEFAULT_MODEL = 'anthropic/claude-haiku-5.5';
 const CACHE_MS = 10 * 60 * 1000;
 const PER_MINUTE = 8;
 const AI_TIMEOUT_MS = 20000;
+// Generous on purpose: some models count hidden reasoning against this limit, and 350 cut
+// the answer off mid-sentence on the live site. The answer itself is about 200 tokens.
+const MAX_TOKENS = 1500;
 
 const cache = new Map();
 const hits = new Map();
@@ -76,7 +79,7 @@ export async function explain(report, { fetchImpl = fetch, env = process.env } =
       },
       body: JSON.stringify({
         model,
-        max_tokens: 350,
+        max_tokens: MAX_TOKENS,
         temperature: 0.2,
         messages: [
           {
@@ -91,8 +94,16 @@ export async function explain(report, { fetchImpl = fetch, env = process.env } =
     });
     if (!res.ok) return { text: null, model, reason: `AI service answered ${res.status}` };
     const body = await res.json();
-    const text = body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content;
-    return typeof text === 'string' && text.trim() ? { text: text.trim(), model } : { text: null, model, reason: 'empty AI answer' };
+    const choice = (body.choices && body.choices[0]) || {};
+    let text = choice.message && typeof choice.message.content === 'string' ? choice.message.content.trim() : '';
+    if (!text) return { text: null, model, reason: `empty AI answer (finish: ${choice.finish_reason || 'unknown'})` };
+    if (choice.finish_reason === 'length') {
+      // The model ran out of tokens mid-sentence: keep only whole sentences.
+      const end = Math.max(text.lastIndexOf('. '), text.lastIndexOf('.\n'));
+      if (end < 40) return { text: null, model, reason: 'AI answer was cut off' };
+      text = text.slice(0, end + 1);
+    }
+    return { text, model };
   } catch (err) {
     return { text: null, model, reason: err.name === 'AbortError' ? 'AI service timed out' : 'AI service unreachable' };
   } finally {

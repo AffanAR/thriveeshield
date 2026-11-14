@@ -90,8 +90,21 @@ test('the model only receives the audit facts, with the chosen model and a token
   assert.equal(sent.url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(sent.auth, 'Bearer k');
   assert.equal(sent.body.model, 'some/other-model');
-  assert.equal(sent.body.max_tokens, 350);
+  assert.equal(sent.body.max_tokens, 1500);
   assert.deepEqual(Object.keys(JSON.parse(sent.body.messages[1].content)).sort(), ['account', 'appKeys', 'findings', 'fullAccessKeys', 'grade', 'score']);
+});
+
+test('an answer cut off by the token limit keeps only whole sentences', async () => {
+  const report = { accountId: 'me.near', score: 88, grade: 'Good', keys: { full: 2, limited: 0 }, findings: [] };
+  const reply = (content, finish_reason) => async () => json({ choices: [{ message: { content }, finish_reason }] });
+  const env = { OPENROUTER_API_KEY: 'k' };
+  const cut = await explain(report, { env, fetchImpl: reply('This account scores 88 out of 100, which is Good. It has two keys. You should rem', 'length') });
+  assert.equal(cut.text, 'This account scores 88 out of 100, which is Good. It has two keys.');
+  const whole = await explain(report, { env, fetchImpl: reply('All fine. Nothing to do', 'stop') });
+  assert.equal(whole.text, 'All fine. Nothing to do');
+  const tiny = await explain(report, { env, fetchImpl: reply('This account', 'length') });
+  assert.equal(tiny.text, null);
+  assert.match(tiny.reason, /cut off/);
 });
 
 test('key lookup tolerates naming slips and reports names, never values', () => {
