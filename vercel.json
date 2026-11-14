@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "outputDirectory": "docs",
+  "installCommand": "echo \"no dependencies needed for the site or the API\"",
+  "buildCommand": "echo \"static site, nothing to build\"",
+  "functions": {
+    "api/checkup.js": { "maxDuration": 30 }
+  }
+}

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ThriveeShield: account check-up</title>
+<meta name="description" content="Type a NEAR account name and see which keys and apps can act on it, with a plain-language AI summary.">
+<style>
+  :root{--bg:#0b0f17;--panel:#111723;--line:#222b3a;--text:#e7ecf3;--mute:#93a0b4;--dim:#6f7c91;--ok:#37d67a;--warn:#ffb020;--bad:#ff5c6a;--info:#6aa7ff;--accent:#8ab4ff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent)}
+  .wrap{max-width:820px;margin:0 auto;padding:0 16px 48px}
+  header{padding:28px 0 4px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;color:var(--text);text-decoration:none}
+  .mark{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#37d67a,#2aa7ff);display:grid;place-items:center;color:#06110b;font-weight:800}
+  nav a{font-size:14px}
+  h1{font-size:clamp(24px,4.2vw,34px);line-height:1.2;margin:22px 0 8px}
+  .lede{color:var(--mute);margin:0 0 20px;max-width:40em}
+  form{display:flex;gap:10px;flex-wrap:wrap}
+  input{flex:1 1 240px;min-width:0;background:#0a0e16;border:1px solid var(--line);border-radius:10px;padding:12px 14px;color:var(--text);font:15px ui-monospace,Consolas,monospace}
+  button{border:0;border-radius:10px;padding:12px 18px;font:inherit;font-weight:650;cursor:pointer;background:#e7ecf3;color:#0d1117}
+  button:disabled{opacity:.6;cursor:progress}
+  input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .hint{color:var(--dim);font-size:13px;margin:8px 0 0}
+  .msg{margin:18px 0;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--mute)}
+  .msg.err{border-color:#5a2028;color:#ff9aa3}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin-top:18px}
+  .top{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+  .score{flex:none;width:96px;height:96px;border-radius:50%;display:grid;place-items:center;border:5px solid var(--ok);font-size:30px;font-weight:750}
+  .score.mid{border-color:var(--warn)}.score.low{border-color:var(--bad)}
+  .who{min-width:0;flex:1 1 220px}
+  .who b{font:600 17px ui-monospace,Consolas,monospace;overflow-wrap:anywhere}
+  .who div{color:var(--mute);font-size:14px}
+  .grade{font-weight:700;color:var(--text)}
+  h2{font-size:12px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
+  .ai{white-space:pre-wrap;overflow-wrap:anywhere}
+  .ai-note{color:var(--dim);font-size:12.5px;margin-top:10px}
+  ul{list-style:none;margin:0;padding:0}
+  .finds li{display:flex;gap:10px;padding:10px 0;border-top:1px solid #1c2431}
+  .finds li:first-child{border-top:0;padding-top:0}
+  .dot{flex:none;width:9px;height:9px;border-radius:50%;margin-top:7px}
+  .l-block{background:var(--bad)}.l-warn{background:var(--warn)}.l-info{background:var(--info)}.l-ok{background:var(--ok)}
+  .ft{font-weight:600;overflow-wrap:anywhere}.fd{color:var(--mute);font-size:14px;overflow-wrap:anywhere}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{text-align:left;color:var(--dim);font-weight:600;font-size:12px;padding:0 8px 6px 0}
+  td{padding:7px 8px 7px 0;border-top:1px solid #1c2431;overflow-wrap:anywhere}
+  td.c{font-family:ui-monospace,Consolas,monospace;font-size:13px}
+  .pill{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 7px}
+  .p-ok{background:#0f2e1e;color:var(--ok)}.p-warn{background:#33250a;color:var(--warn)}.p-bad{background:#34121a;color:var(--bad)}.p-na{background:#1b2331;color:var(--mute)}
+  .stats{display:flex;gap:22px;flex-wrap:wrap;margin-bottom:12px;color:var(--mute);font-size:14px}
+  .stats b{color:var(--text);font-size:18px;display:block}
+  footer{color:var(--dim);font-size:13px;margin-top:28px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="brand" href="./"><div class="mark">T</div> ThriveeShield</a>
+    <nav><a href="./">Try the wallet guard</a></nav>
+  </header>
+
+  <h1>Account check-up</h1>
+  <p class="lede">Every app you ever connected left a key on your NEAR account. Type an account name to see which keys and apps can act on it, and what to clean up.</p>
+
+  <form id="form">
+    <input id="account" name="account" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="yourname.near" aria-label="NEAR account name" required>
+    <button id="go" type="submit">Check account</button>
+  </form>
+  <p class="hint">Read-only. It uses public chain data and never asks for a wallet, a key or a seed phrase. Works for mainnet (<code>.near</code>) and testnet (<code>.testnet</code>) accounts.</p>
+
+  <div id="status" class="msg" hidden></div>
+  <div id="result" hidden>
+    <div class="panel">
+      <div class="top">
+        <div class="score" id="score">0</div>
+        <div class="who">
+          <b id="r-account"></b>
+          <div><span class="grade" id="r-grade"></span> &middot; <span id="r-balance"></span> &middot; <span id="r-network"></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="panel" id="ai-panel">
+      <h2>AI summary</h2>
+      <div class="ai" id="ai"></div>
+      <div class="ai-note" id="ai-note"></div>
+    </div>
+    <div class="panel">
+      <h2>What we found</h2>
+      <ul class="finds" id="finds"></ul>
+    </div>
+    <div class="panel">
+      <h2>Keys on this account</h2>
+      <div class="stats">
+        <div><b id="k-full">0</b>full-access keys</div>
+        <div><b id="k-limited">0</b>app keys</div>
+        <div><b id="k-tx">0</b>recent transactions checked</div>
+      </div>
+      <table id="apps-table" hidden>
+        <thead><tr><th>App contract</th><th>Keys</th><th>Status</th></tr></thead>
+        <tbody id="apps"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>The score is rule-based: it counts full-access keys, keys for apps that no longer exist, and contact with blocklisted addresses. The blocklist is small, so a good score is not a guarantee. Hackathon prototype, not audited.</footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  // Same origin when deployed with the API (Vercel). Elsewhere, use the public backend.
+  const sameOrigin = location.hostname === 'shield.thrivee.tech' || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.endsWith('.vercel.app');
+  const API = (sameOrigin ? '' : 'https://shield.thrivee.tech') + '/api/checkup';
+  const $ = (id) => document.getElementById(id);
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+
+  function show(r) {
+    $('score').textContent = r.score;
+    $('score').className = 'score' + (r.score >= 85 ? '' : r.score >= 60 ? ' mid' : ' low');
+    $('r-account').textContent = r.accountId;
+    $('r-grade').textContent = r.grade;
+    $('r-balance').textContent = r.balance;
+    $('r-network').textContent = r.network;
+
+    if (r.ai) {
+      $('ai').textContent = r.ai;
+      $('ai-note').textContent = `Written by ${r.aiModel} from the findings below. It can be wrong; the findings are the source.`;
+    } else {
+      $('ai').textContent = 'The AI summary is not available right now. The findings below are complete without it.';
+      $('ai-note').textContent = r.aiNote ? `Reason: ${r.aiNote}.` : '';
+    }
+
+    const finds = $('finds');
+    finds.replaceChildren();
+    for (const f of r.findings) {
+      const li = el('li');
+      li.appendChild(el('span', `dot l-${f.level}`));
+      const box = el('div');
+      box.appendChild(el('div', 'ft', f.title));
+      box.appendChild(el('div', 'fd', f.detail));
+      li.appendChild(box);
+      finds.appendChild(li);
+    }
+    if (r.partial && r.partial.length) {
+      const li = el('li');
+      li.appendChild(el('span', 'dot l-info'));
+      const box = el('div');
+      box.appendChild(el('div', 'ft', 'Some data could not be read'));
+      box.appendChild(el('div', 'fd', `Missing: ${r.partial.join(', ')}. The score does not include it.`));
+      li.appendChild(box);
+      finds.appendChild(li);
+    }
+
+    $('k-full').textContent = r.keys.full;
+    $('k-limited').textContent = r.keys.limited;
+    $('k-tx').textContent = r.transactionsChecked;
+    const apps = $('apps');
+    apps.replaceChildren();
+    for (const a of r.keys.apps) {
+      const tr = el('tr');
+      tr.appendChild(el('td', 'c', a.contract || '(no contract)'));
+      tr.appendChild(el('td', '', String(a.count)));
+      const td = el('td');
+      const [cls, text] = a.blocked ? ['p-bad', 'blocklisted'] : a.exists === false ? ['p-warn', 'app no longer exists'] : a.exists ? ['p-ok', 'live'] : ['p-na', 'not checked'];
+      td.appendChild(el('span', `pill ${cls}`, text));
+      tr.appendChild(td);
+      apps.appendChild(tr);
+    }
+    $('apps-table').hidden = r.keys.apps.length === 0;
+    $('result').hidden = false;
+  }
+
+  function status(text, isError) {
+    const s = $('status');
+    s.textContent = text;
+    s.className = 'msg' + (isError ? ' err' : '');
+    s.hidden = !text;
+  }
+
+  async function run(account) {
+    $('result').hidden = true;
+    $('go').disabled = true;
+    status('Reading the chain and writing the summary. This takes a few seconds...');
+    try {
+      const res = await fetch(`${API}?account=${encodeURIComponent(account)}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'The check-up failed.');
+      status('');
+      show(body);
+    } catch (err) {
+      status(err.message === 'Failed to fetch' ? 'The check-up service is not reachable right now.' : err.message, true);
+    } finally {
+      $('go').disabled = false;
+    }
+  }
+
+  $('form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const account = $('account').value.trim().toLowerCase();
+    if (account) run(account);
+  });
+})();
+</script>
+</body>
+</html>

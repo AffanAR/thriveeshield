@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "ThriveeShield",
+  "version": "0.1.0",
+  "description": "Reads every NEAR wallet request before your wallet signs it, and blocks the dangerous ones.",
+  "action": { "default_title": "ThriveeShield", "default_popup": "popup.html" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://rpc.mainnet.fastnear.com/*",
+    "https://test.rpc.fastnear.com/*",
+    "https://api.nearblocks.io/*",
+    "https://api-testnet.nearblocks.io/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["shared/guard-core.js", "inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ]
+}

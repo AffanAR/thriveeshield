@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ThriveeShield</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;width:360px;background:#0b0f17;color:#e7ecf3;font:13.5px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid #222b3a}
+  .mark{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#37d67a,#2aa7ff);display:grid;place-items:center;color:#06110b;font-weight:800}
+  header b{font-size:15px}
+  header span{margin-left:auto;font-size:12px;color:#37d67a;font-weight:650}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:12px 16px}
+  .stat{background:#111723;border:1px solid #222b3a;border-radius:10px;padding:8px 10px}
+  .stat i{display:block;font-style:normal;font-size:20px;font-weight:700}
+  .stat span{font-size:11.5px;color:#93a0b4}
+  .a i{color:#37d67a}.w i{color:#ffb020}.b i{color:#ff5c6a}
+  h2{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#6f7c91;margin:6px 16px}
+  ul{list-style:none;margin:0;padding:0 12px 12px;max-height:300px;overflow:auto}
+  li{border-left:3px solid #222b3a;background:#0e131c;border-radius:0 8px 8px 0;padding:7px 10px;margin-bottom:6px}
+  li.allow{border-color:#37d67a}li.warn{border-color:#ffb020}li.block{border-color:#ff5c6a}
+  .t{font-weight:600;overflow-wrap:anywhere}
+  .d{font-size:12px;color:#93a0b4;overflow-wrap:anywhere}
+  .empty{color:#6f7c91;padding:10px 16px 16px}
+  footer{padding:10px 16px 14px;border-top:1px solid #222b3a;font-size:11.5px;color:#6f7c91}
+</style>
+</head>
+<body>
+<header><div class="mark">T</div><b>ThriveeShield</b><span>Guarding NEAR wallets</span></header>
+<div class="stats">
+  <div class="stat a"><i id="n-allow">0</i><span>allowed</span></div>
+  <div class="stat w"><i id="n-warn">0</i><span>warned</span></div>
+  <div class="stat b"><i id="n-block">0</i><span>blocked</span></div>
+</div>
+<h2>Recent requests</h2>
+<ul id="list"></ul>
+<div class="empty" id="empty">Nothing checked yet. Open a NEAR app and use your wallet.</div>
+<div style="padding:0 16px 12px"><a href="https://shield.thrivee.tech/checkup.html" target="_blank" rel="noopener" style="display:block;text-align:center;background:#e7ecf3;color:#0d1117;border-radius:9px;padding:9px;font-weight:650;text-decoration:none">Run an account check-up</a></div>
+<footer>Built for Meteor, HOT, Intear, Nightly, Sender, Bitget and OKX wallets. ThriveeShield never holds your keys.</footer>
+<script src="popup.js"></script>
+</body>
+</html>

@@ -12,6 +12,8 @@
     "demo": "node agent/demo.js",
     "demo:testnet": "node agent/demo.js --network testnet",
     "service": "node risk-service/server.js",
+    "site": "node scripts/dev-server.js",
+    "demo:sync": "node scripts/sync-demo.js",
     "test": "node --test \"test/*.test.js\"",
     "contract:build": "bash scripts/build-contract.sh",
     "contract:test": "bash scripts/test-contract.sh"
